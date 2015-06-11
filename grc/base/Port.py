@@ -18,13 +18,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 """
 
 from Element import Element
+from . Constants import GR_STREAM_DOMAIN, GR_MESSAGE_DOMAIN
 
 class Port(Element):
 
     def __init__(self, block, n, dir):
         """
         Make a new port from nested data.
-        
+
         Args:
             block: the parent element
             n: the nested odict
@@ -36,7 +37,10 @@ class Port(Element):
         self._name = n['name']
         self._key = n['key']
         self._type = n['type']
+        self._domain = n['domain']
+        self._hide = n.find('hide') or ''
         self._dir = dir
+        self._hide_evaluated = False  # updated on rewrite()
 
     def validate(self):
         """
@@ -45,7 +49,22 @@ class Port(Element):
         """
         Element.validate(self)
         if self.get_type() not in self.get_types():
-            self.add_error_message('Type "%s" is not a possible type.'%self.get_type())
+            self.add_error_message('Type "%s" is not a possible type.' % self.get_type())
+        platform = self.get_parent().get_parent().get_parent()
+        if self.get_domain() not in platform.get_domains():
+            self.add_error_message('Domain key "%s" is not registered.' % self.get_domain())
+
+    def rewrite(self):
+        """resolve dependencies in for type and hide"""
+        Element.rewrite(self)
+        hide = self.get_parent().resolve_dependencies(self._hide).strip().lower()
+        self._hide_evaluated = False if hide in ('false', 'off', '0') else bool(hide)
+        # update domain if was deduced from (dynamic) port type
+        type_ = self.get_type()
+        if self._domain == GR_STREAM_DOMAIN and type_ == "message":
+            self._domain = GR_MESSAGE_DOMAIN
+        if self._domain == GR_MESSAGE_DOMAIN and type_ != "message":
+            self._domain = GR_STREAM_DOMAIN
 
     def __str__(self):
         if self.is_source():
@@ -65,20 +84,21 @@ class Port(Element):
     def get_name(self):
         number = ''
         if self.get_type() == 'bus':
-            busses = filter(lambda a: a._dir == self._dir, self.get_parent().get_ports_gui());
-            
-            number = str(busses.index(self)) + '#' + str(len(self.get_associated_ports()));
+            busses = filter(lambda a: a._dir == self._dir, self.get_parent().get_ports_gui())
+            number = str(busses.index(self)) + '#' + str(len(self.get_associated_ports()))
         return self._name + number
 
     def get_key(self): return self._key
     def is_sink(self): return self._dir == 'sink'
     def is_source(self): return self._dir == 'source'
     def get_type(self): return self.get_parent().resolve_dependencies(self._type)
+    def get_domain(self): return self._domain
+    def get_hide(self): return self._hide_evaluated
 
     def get_connections(self):
         """
         Get all connections that use this port.
-        
+
         Returns:
             a list of connection objects
         """
@@ -89,7 +109,7 @@ class Port(Element):
     def get_enabled_connections(self):
         """
         Get all enabled connections that use this port.
-        
+
         Returns:
             a list of connection objects
         """
@@ -97,20 +117,18 @@ class Port(Element):
 
     def get_associated_ports(self):
         if not self.get_type() == 'bus':
-            return [self];
+            return [self]
         else:
             if self.is_source():
-                get_p = self.get_parent().get_sources;
-                bus_structure = self.get_parent().current_bus_structure['source'];
-                direc = 'source'
+                get_ports = self.get_parent().get_sources
+                bus_structure = self.get_parent().current_bus_structure['source']
             else:
-                get_p = self.get_parent().get_sinks;
-                bus_structure = self.get_parent().current_bus_structure['sink'];
-                direc = 'sink'
-            
-            ports = [i for i in get_p() if not i.get_type() == 'bus'];
+                get_ports = self.get_parent().get_sinks
+                bus_structure = self.get_parent().current_bus_structure['sink']
+
+            ports = [i for i in get_ports() if not i.get_type() == 'bus']
             if bus_structure:
-                busses = [i for i in get_p() if i.get_type() == 'bus'];
-                bus_index = busses.index(self);
-                ports = filter(lambda a: ports.index(a) in bus_structure[bus_index], ports);
-            return ports;
+                busses = [i for i in get_ports() if i.get_type() == 'bus']
+                bus_index = busses.index(self)
+                ports = filter(lambda a: ports.index(a) in bus_structure[bus_index], ports)
+            return ports

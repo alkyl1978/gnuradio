@@ -85,11 +85,11 @@ namespace gr {
        *  \param look new look-ahead factor
        */
       virtual void set_look_ahead(int look) = 0;
-      
+
       /*! \brief Set the running average alpha
        *  \param alpha new alpha for running average
        */
-      virtual void set_alpha(int alpha) = 0;
+      virtual void set_alpha(float alpha) = 0;
 
       /*! \brief Get the threshold factor value for the rise time
        *  \return threshold factor

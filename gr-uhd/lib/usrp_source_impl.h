@@ -20,6 +20,7 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#include "usrp_block_impl.h"
 #include <gnuradio/uhd/usrp_source.h>
 #include <uhd/convert.hpp>
 #include <boost/thread/mutex.hpp>
@@ -50,14 +51,12 @@ namespace gr {
     /***********************************************************************
      * UHD Multi USRP Source Impl
      **********************************************************************/
-    class usrp_source_impl : public usrp_source
+    class usrp_source_impl : public usrp_source, public usrp_block_impl
     {
     public:
       usrp_source_impl(const ::uhd::device_addr_t &device_addr,
                        const ::uhd::stream_args_t &stream_args);
       ~usrp_source_impl();
-
-      void setup_rpc();
 
       // Get Commands
       ::uhd::dict<std::string, std::string> get_usrp_info(size_t chan);
@@ -68,6 +67,7 @@ namespace gr {
       ::uhd::freq_range_t get_freq_range(size_t chan);
       double get_gain(size_t chan);
       double get_gain(const std::string &name, size_t chan);
+      double get_normalized_gain(size_t chan);
       std::vector<std::string> get_gain_names(size_t chan);
       ::uhd::gain_range_t get_gain_range(size_t chan);
       ::uhd::gain_range_t get_gain_range(const std::string &name, size_t chan);
@@ -75,17 +75,7 @@ namespace gr {
       std::vector<std::string> get_antennas(size_t chan);
       ::uhd::sensor_value_t get_sensor(const std::string &name, size_t chan);
       std::vector<std::string> get_sensor_names(size_t chan);
-      ::uhd::sensor_value_t get_mboard_sensor(const std::string &name, size_t mboard);
-      std::vector<std::string> get_mboard_sensor_names(size_t mboard);
-      std::string get_time_source(const size_t mboard);
-      std::vector<std::string> get_time_sources(const size_t mboard);
-      std::string get_clock_source(const size_t mboard);
-      std::vector<std::string> get_clock_sources(const size_t mboard);
-      double get_clock_rate(size_t mboard);
-      ::uhd::time_spec_t get_time_now(size_t mboard = 0);
-      ::uhd::time_spec_t get_time_last_pps(size_t mboard);
       ::uhd::usrp::dboard_iface::sptr get_dboard_iface(size_t chan);
-      ::uhd::usrp::multi_usrp::sptr get_device(void);
 
       // Set Commands
       void set_subdev_spec(const std::string &spec, size_t mboard);
@@ -94,26 +84,19 @@ namespace gr {
                                          size_t chan);
       void set_gain(double gain, size_t chan);
       void set_gain(double gain, const std::string &name, size_t chan);
+      void set_normalized_gain(double gain, size_t chan);
       void set_antenna(const std::string &ant, size_t chan);
       void set_bandwidth(double bandwidth, size_t chan);
       double get_bandwidth(size_t chan);
       ::uhd::freq_range_t get_bandwidth_range(size_t chan);
       void set_auto_dc_offset(const bool enable, size_t chan);
       void set_dc_offset(const std::complex<double> &offset, size_t chan);
+      void set_auto_iq_balance(const bool enable, size_t chan);
       void set_iq_balance(const std::complex<double> &correction, size_t chan);
-      void set_clock_config(const ::uhd::clock_config_t &clock_config, size_t mboard);
-      void set_time_source(const std::string &source, const size_t mboard);
-      void set_clock_source(const std::string &source, const size_t mboard);
-      void set_clock_rate(double rate, size_t mboard);
-      void set_time_now(const ::uhd::time_spec_t &time_spec, size_t mboard);
-      void set_time_next_pps(const ::uhd::time_spec_t &time_spec);
-      void set_time_unknown_pps(const ::uhd::time_spec_t &time_spec);
-      void set_command_time(const ::uhd::time_spec_t &time_spec, size_t mboard);
-      void set_user_register(const uint8_t addr, const uint32_t data, size_t mboard);
+      void set_stream_args(const ::uhd::stream_args_t &stream_args);
       void set_start_time(const ::uhd::time_spec_t &time);
 
       void issue_stream_cmd(const ::uhd::stream_cmd_t &cmd);
-      void clear_command_time(size_t mboard);
       void flush(void);
       bool start(void);
       bool stop(void);
@@ -124,21 +107,16 @@ namespace gr {
                gr_vector_void_star &output_items);
 
     private:
-      ::uhd::usrp::multi_usrp::sptr _dev;
-      const ::uhd::stream_args_t _stream_args;
-      boost::shared_ptr< ::uhd::io_type_t > _type;
+      //! Like set_center_freq(), but uses _curr_freq and _curr_lo_offset
+      ::uhd::tune_result_t _set_center_freq_from_internals(size_t chan);
 
 #ifdef GR_UHD_USE_STREAM_API
       ::uhd::rx_streamer::sptr _rx_stream;
       size_t _samps_per_packet;
 #endif
-      size_t _nchan;
-      bool _stream_now, _tag_now;
+      bool _tag_now;
       ::uhd::rx_metadata_t _metadata;
       pmt::pmt_t _id;
-
-      ::uhd::time_spec_t _start_time;
-      bool _start_time_set;
 
       //tag shadows
       double _samp_rate;

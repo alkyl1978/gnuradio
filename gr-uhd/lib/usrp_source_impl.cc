@@ -1,6 +1,6 @@
 /* -*- c++ -*- */
 /*
- * Copyright 2010-2013 Free Software Foundation, Inc.
+ * Copyright 2010-2015 Free Software Foundation, Inc.
  *
  * This file is part of GNU Radio
  *
@@ -22,7 +22,6 @@
 
 #include "usrp_source_impl.h"
 #include "gr_uhd_common.h"
-#include <gnuradio/io_signature.h>
 #include <boost/format.hpp>
 #include <boost/thread/thread.hpp>
 #include <boost/make_shared.hpp>
@@ -63,23 +62,21 @@ namespace gr {
 
     usrp_source_impl::usrp_source_impl(const ::uhd::device_addr_t &device_addr,
                                        const ::uhd::stream_args_t &stream_args):
-      sync_block("gr uhd usrp source",
+      usrp_block("gr uhd usrp source",
                     io_signature::make(0, 0, 0),
                     args_to_io_sig(stream_args)),
-      _stream_args(stream_args),
-      _nchan(stream_args.channels.size()),
-      _stream_now(_nchan == 1),
-      _tag_now(false),
-      _start_time_set(false)
+      usrp_block_impl(device_addr, stream_args, ""),
+      _tag_now(false)
     {
-      if(stream_args.cpu_format == "fc32")
-        _type = boost::make_shared< ::uhd::io_type_t >(::uhd::io_type_t::COMPLEX_FLOAT32);
-      if(stream_args.cpu_format == "sc16")
-        _type = boost::make_shared< ::uhd::io_type_t >(::uhd::io_type_t::COMPLEX_INT16);
       std::stringstream str;
       str << name() << unique_id();
       _id = pmt::string_to_symbol(str.str());
-      _dev = ::uhd::usrp::multi_usrp::make(device_addr);
+
+      _samp_rate = this->get_samp_rate();
+      _center_freq = this->get_center_freq(0);
+#ifdef GR_UHD_USE_STREAM_API
+      _samps_per_packet = 1;
+#endif
     }
 
     usrp_source_impl::~usrp_source_impl()
@@ -148,6 +145,8 @@ namespace gr {
       return res;
     }
 
+    SET_CENTER_FREQ_FROM_INTERNALS(usrp_source_impl, set_rx_freq);
+
     double
     usrp_source_impl::get_center_freq(size_t chan)
     {
@@ -176,6 +175,16 @@ namespace gr {
       return _dev->set_rx_gain(gain, name, chan);
     }
 
+    void usrp_source_impl::set_normalized_gain(double norm_gain, size_t chan)
+    {
+      if (norm_gain > 1.0 || norm_gain < 0.0) {
+        throw std::runtime_error("Normalized gain out of range, must be in [0, 1].");
+      }
+      ::uhd::gain_range_t gain_range = get_gain_range(chan);
+      double abs_gain = (norm_gain * (gain_range.stop() - gain_range.start())) + gain_range.start();
+      set_gain(abs_gain, chan);
+    }
+
     double
     usrp_source_impl::get_gain(size_t chan)
     {
@@ -188,6 +197,19 @@ namespace gr {
     {
       chan = _stream_args.channels[chan];
       return _dev->get_rx_gain(name, chan);
+    }
+
+    double
+    usrp_source_impl::get_normalized_gain(size_t chan)
+    {
+      ::uhd::gain_range_t gain_range = get_gain_range(chan);
+      double norm_gain =
+        (get_gain(chan) - gain_range.start()) /
+        (gain_range.stop() - gain_range.start());
+      // Avoid rounding errors:
+      if (norm_gain > 1.0) return 1.0;
+      if (norm_gain < 0.0) return 0.0;
+      return norm_gain;
     }
 
     std::vector<std::string>
@@ -277,6 +299,18 @@ namespace gr {
     }
 
     void
+    usrp_source_impl::set_auto_iq_balance(const bool enable, size_t chan)
+    {
+      chan = _stream_args.channels[chan];
+#ifdef UHD_USRP_MULTI_USRP_FRONTEND_IQ_AUTO_API
+      return _dev->set_rx_iq_balance(enable, chan);
+#else
+      throw std::runtime_error("not implemented in this version");
+#endif
+    }
+
+
+    void
     usrp_source_impl::set_iq_balance(const std::complex<double> &correction,
                                      size_t chan)
     {
@@ -302,150 +336,6 @@ namespace gr {
       return _dev->get_rx_sensor_names(chan);
     }
 
-    ::uhd::sensor_value_t
-    usrp_source_impl::get_mboard_sensor(const std::string &name, size_t mboard)
-    {
-      return _dev->get_mboard_sensor(name, mboard);
-    }
-
-    std::vector<std::string>
-    usrp_source_impl::get_mboard_sensor_names(size_t mboard)
-    {
-      return _dev->get_mboard_sensor_names(mboard);
-    }
-
-    void
-    usrp_source_impl::set_clock_config(const ::uhd::clock_config_t &clock_config,
-                                       size_t mboard)
-    {
-      return _dev->set_clock_config(clock_config, mboard);
-    }
-
-    void
-    usrp_source_impl::set_time_source(const std::string &source,
-                                      const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->set_time_source(source, mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    std::string
-    usrp_source_impl::get_time_source(const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->get_time_source(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    std::vector<std::string>
-    usrp_source_impl::get_time_sources(const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->get_time_sources(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    void
-    usrp_source_impl::set_clock_source(const std::string &source,
-                                       const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->set_clock_source(source, mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    std::string
-    usrp_source_impl::get_clock_source(const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->get_clock_source(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    std::vector<std::string>
-    usrp_source_impl::get_clock_sources(const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->get_clock_sources(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    double
-    usrp_source_impl::get_clock_rate(size_t mboard)
-    {
-      return _dev->get_master_clock_rate(mboard);
-    }
-
-    void
-    usrp_source_impl::set_clock_rate(double rate, size_t mboard)
-    {
-      return _dev->set_master_clock_rate(rate, mboard);
-    }
-
-    ::uhd::time_spec_t
-    usrp_source_impl::get_time_now(size_t mboard)
-    {
-      return _dev->get_time_now(mboard);
-    }
-
-    ::uhd::time_spec_t
-    usrp_source_impl::get_time_last_pps(size_t mboard)
-    {
-      return _dev->get_time_last_pps(mboard);
-    }
-
-    void
-    usrp_source_impl::set_time_now(const ::uhd::time_spec_t &time_spec,
-                                   size_t mboard)
-    {
-      return _dev->set_time_now(time_spec, mboard);
-    }
-
-    void
-    usrp_source_impl::set_time_next_pps(const ::uhd::time_spec_t &time_spec)
-    {
-      return _dev->set_time_next_pps(time_spec);
-    }
-
-    void
-    usrp_source_impl::set_time_unknown_pps(const ::uhd::time_spec_t &time_spec)
-    {
-      return _dev->set_time_unknown_pps(time_spec);
-    }
-
-    void
-    usrp_source_impl::set_command_time(const ::uhd::time_spec_t &time_spec, size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_COMMAND_TIME_API
-      return _dev->set_command_time(time_spec, mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    void
-    usrp_source_impl::clear_command_time(size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_COMMAND_TIME_API
-      return _dev->clear_command_time(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
     ::uhd::usrp::dboard_iface::sptr
     usrp_source_impl::get_dboard_iface(size_t chan)
     {
@@ -453,19 +343,12 @@ namespace gr {
       return _dev->get_rx_dboard_iface(chan);
     }
 
-    ::uhd::usrp::multi_usrp::sptr
-    usrp_source_impl::get_device(void)
-    {
-      return _dev;
-    }
-
     void
-    usrp_source_impl::set_user_register(const uint8_t addr,
-                                        const uint32_t data,
-                                        size_t mboard)
+    usrp_source_impl::set_stream_args(const ::uhd::stream_args_t &stream_args)
     {
-#ifdef UHD_USRP_MULTI_USRP_USER_REGS_API
-      _dev->set_user_register(addr, data, mboard);
+      _update_stream_args(stream_args);
+#ifdef GR_UHD_USE_STREAM_API
+      _rx_stream.reset();
 #else
       throw std::runtime_error("not implemented in this version");
 #endif
@@ -668,28 +551,6 @@ namespace gr {
       }
 
       return num_samps;
-    }
-
-    void
-    usrp_source_impl::setup_rpc()
-    {
-#ifdef GR_CTRLPORT
-      add_rpc_variable(
-        rpcbasic_sptr(new rpcbasic_register_get<usrp_source, double>(
-	  alias(), "samp_rate",
-	  &usrp_source::get_samp_rate,
-	  pmt::mp(100000.0f), pmt::mp(25000000.0f), pmt::mp(1000000.0f),
-	  "sps", "RX Sample Rate", RPC_PRIVLVL_MIN,
-          DISPTIME | DISPOPTSTRIP)));
-
-      add_rpc_variable(
-        rpcbasic_sptr(new rpcbasic_register_set<usrp_source, double>(
-	  alias(), "samp_rate",
-	  &usrp_source::set_samp_rate,
-	  pmt::mp(100000.0f), pmt::mp(25000000.0f), pmt::mp(1000000.0f),
-	  "sps", "RX Sample Rate",
-	  RPC_PRIVLVL_MIN, DISPNULL)));
-#endif /* GR_CTRLPORT */
     }
 
   } /* namespace uhd */

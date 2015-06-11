@@ -78,6 +78,8 @@ namespace gr {
 #endif
 
       virtual void set_y_axis(double min, double max) = 0;
+      virtual void set_y_label(const std::string &label,
+                               const std::string &unit="") = 0;
       virtual void set_update_time(double t) = 0;
       virtual void set_title(const std::string &title) = 0;
       virtual void set_line_label(int which, const std::string &label) = 0;
@@ -155,7 +157,9 @@ namespace gr {
       virtual void enable_stem_plot(bool en=true) = 0;
       virtual void enable_semilogx(bool en=true) = 0;
       virtual void enable_semilogy(bool en=true) = 0;
+      virtual void enable_control_panel(bool en=true) = 0;
       virtual void enable_tags(int which, bool en) = 0;
+      virtual void disable_legend() = 0;
 
       virtual int nsamps() const = 0;
       virtual void reset() = 0;

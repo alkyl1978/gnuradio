@@ -1,4 +1,4 @@
-# Copyright 2011-2013 Free Software Foundation, Inc.
+# Copyright 2011-2015 Free Software Foundation, Inc.
 #
 # This file is part of GNU Radio
 #
@@ -18,53 +18,11 @@
 # Boston, MA 02110-1301, USA.
 
 ########################################################################
-# generate helper scripts to expand templated files
-########################################################################
-include(GrPython)
-
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/generate_helper.py "
-#!${PYTHON_EXECUTABLE}
-
-import sys, os, re
-sys.path.append('${GR_RUNTIME_PYTHONPATH}')
-os.environ['srcdir'] = '${CMAKE_CURRENT_SOURCE_DIR}'
-os.chdir('${CMAKE_CURRENT_BINARY_DIR}')
-
-if __name__ == '__main__':
-    import build_utils
-    root, inp = sys.argv[1:3]
-    for sig in sys.argv[3:]:
-        name = re.sub ('X+', sig, root)
-        d = build_utils.standard_dict2(name, sig, 'digital')
-        build_utils.expand_template(d, inp)
-
-")
-
-macro(expand_h root)
-  #make a list of all the generated files
-  unset(expanded_files_h)
-  foreach(sig ${ARGN})
-    string(REGEX REPLACE "X+" ${sig} name ${root})
-    list(APPEND expanded_files_h ${CMAKE_CURRENT_BINARY_DIR}/${name}.h)
-  endforeach(sig)
-
-  #create a command to generate the files
-  add_custom_command(
-    OUTPUT ${expanded_files_h}
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${root}.h.t
-    COMMAND ${PYTHON_EXECUTABLE} ${PYTHON_DASH_B}
-    ${CMAKE_CURRENT_BINARY_DIR}/generate_helper.py
-    ${root} ${root}.h.t ${ARGN}
-    )
-
-  #install rules for the generated h files
-  list(APPEND generated_includes ${expanded_files_h})
-endmacro(expand_h)
-
-########################################################################
-# Invoke macro to generate various sources
+# Invoke macro to generate various headers
 #######################################################################
-expand_h(chunks_to_symbols_XX     bf bc sf sc if ic)
+include(GrMiscUtils)
+GR_EXPAND_X_H(digital chunks_to_symbols_XX     bf bc sf sc if ic)
+GR_EXPAND_X_H(digital burst_shaper_XX     cc ff)
 
 add_custom_target(digital_generated_includes DEPENDS
     ${generated_includes}
@@ -85,6 +43,7 @@ install(FILES
     constellation_decoder_cb.h
     constellation_receiver_cb.h
     constellation_soft_decoder_cf.h
+    corr_est_cc.h
     correlate_access_code_bb.h
     correlate_access_code_tag_bb.h
     correlate_access_code_bb_ts.h
@@ -112,9 +71,11 @@ install(FILES
     lms_dd_equalizer_cc.h
     map_bb.h
     metric_type.h
+    modulate_vector.h
     mpsk_receiver_cc.h
     mpsk_snr_est.h
     mpsk_snr_est_cc.h
+    msk_timing_recovery_cc.h
     ofdm_carrier_allocator_cvc.h
     ofdm_chanest_vcvc.h
     ofdm_cyclic_prefixer.h

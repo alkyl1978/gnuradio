@@ -86,15 +86,18 @@ public slots:
 
   void saveFigure();
 
+  void disableLegend();
+
 private slots:
   virtual void newData(const QEvent*) = 0;
   virtual void autoScale(bool) = 0;
   void updateGuiTimer();
 
-  void onPlotPointSelected(const QPointF p);
+  virtual void onPlotPointSelected(const QPointF p);
 
 signals:
   void plotPointSelected(const QPointF p, int type);
+  void toggleGrid(bool en);
 
 protected:
   bool d_isclosed;

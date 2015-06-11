@@ -71,6 +71,12 @@ namespace gr {
 	memset(d_buffers[n], 0, d_buffer_size*sizeof(double));
       }
 
+      for(int n = 0; n < d_nconnections/2; n++) {
+	d_cbuffers.push_back((gr_complex*)volk_malloc(d_buffer_size*sizeof(gr_complex),
+                                                      volk_get_alignment()));
+	memset(d_cbuffers[n], 0, d_buffer_size*sizeof(gr_complex));
+      }
+
       // Set alignment properties for VOLK
       const int alignment_multiple =
 	volk_get_alignment() / sizeof(gr_complex);
@@ -96,6 +102,9 @@ namespace gr {
       for(int n = 0; n < d_nconnections; n++) {
 	volk_free(d_buffers[n]);
       }
+      for(int n = 0; n < d_nconnections/2; n++) {
+        volk_free(d_cbuffers[n]);
+      }
 
       delete d_argv;
     }
@@ -113,8 +122,10 @@ namespace gr {
 	d_qApplication = qApp;
       }
       else {
+#if QT_VERSION >= 0x040500
         std::string style = prefs::singleton()->get_string("qtgui", "style", "raster");
         QApplication::setGraphicsSystem(QString(style.c_str()));
+#endif
 	d_qApplication = new QApplication(d_argc, &d_argv);
       }
 
@@ -128,6 +139,9 @@ namespace gr {
       d_main_gui = new TimeDisplayForm(d_nconnections, d_parent);
       d_main_gui->setNPoints(d_size);
       d_main_gui->setSampleRate(d_samp_rate);
+
+      if(d_name.size() > 0)
+        set_title(d_name);
 
       // initialize update time to 10 times a second
       set_update_time(0.1);
@@ -165,6 +179,13 @@ namespace gr {
     time_sink_c_impl::set_y_axis(double min, double max)
     {
       d_main_gui->setYaxis(min, max);
+    }
+
+    void
+    time_sink_c_impl::set_y_label(const std::string &label,
+                                  const std::string &unit)
+    {
+      d_main_gui->setYLabel(label, unit);
     }
 
     void
@@ -226,7 +247,7 @@ namespace gr {
                                        float delay, int channel,
                                        const std::string &tag_key)
     {
-      gr::thread::scoped_lock lock(d_mutex);
+      gr::thread::scoped_lock lock(d_setlock);
 
       d_trigger_mode = mode;
       d_trigger_slope = slope;
@@ -306,7 +327,7 @@ namespace gr {
     time_sink_c_impl::set_nsamps(const int newsize)
     {
       if(newsize != d_size) {
-        gr::thread::scoped_lock lock(d_mutex);
+        gr::thread::scoped_lock lock(d_setlock);
 
 	// Set new size and reset buffer index
 	// (throws away any currently held data, but who cares?)
@@ -319,6 +340,13 @@ namespace gr {
 	  d_buffers[n] = (double*)volk_malloc(d_buffer_size*sizeof(double),
                                               volk_get_alignment());
 	  memset(d_buffers[n], 0, d_buffer_size*sizeof(double));
+	}
+
+	for(int n = 0; n < d_nconnections/2; n++) {
+	  volk_free(d_cbuffers[n]);
+	  d_cbuffers[n] = (gr_complex*)volk_malloc(d_buffer_size*sizeof(gr_complex),
+                                                   volk_get_alignment());
+	  memset(d_cbuffers[n], 0, d_buffer_size*sizeof(gr_complex));
 	}
 
         // If delay was set beyond the new boundary, pull it back.
@@ -337,7 +365,7 @@ namespace gr {
     void
     time_sink_c_impl::set_samp_rate(const double samp_rate)
     {
-      gr::thread::scoped_lock lock(d_mutex);
+      gr::thread::scoped_lock lock(d_setlock);
       d_samp_rate = samp_rate;
       d_main_gui->setSampleRate(d_samp_rate);
     }
@@ -385,6 +413,15 @@ namespace gr {
     }
 
     void
+    time_sink_c_impl::enable_control_panel(bool en)
+    {
+      if(en)
+        d_main_gui->setupControlPanel();
+      else
+        d_main_gui->teardownControlPanel();
+    }
+
+    void
     time_sink_c_impl::enable_tags(int which, bool en)
     {
       if(which == -1) {
@@ -397,28 +434,33 @@ namespace gr {
     }
 
     void
+    time_sink_c_impl::disable_legend()
+    {
+      d_main_gui->disableLegend();
+    }
+
+    void
     time_sink_c_impl::reset()
     {
-      gr::thread::scoped_lock lock(d_mutex);
+      gr::thread::scoped_lock lock(d_setlock);
       _reset();
     }
 
     void
     time_sink_c_impl::_reset()
     {
-      // Move the tail of the buffers to the front. This section
-      // represents data that might have to be plotted again if a
-      // trigger occurs and we have a trigger delay set.  The tail
-      // section is between (d_end-d_trigger_delay) and d_end.
       int n;
       if(d_trigger_delay) {
-        for(n = 0; n < d_nconnections; n++) {
-          memmove(d_buffers[n], &d_buffers[n][d_size-d_trigger_delay], d_trigger_delay*sizeof(double));
-        }
-
-        // Also move the offsets of any tags that occur in the tail
-        // section so they would be plotted again, too.
         for(n = 0; n < d_nconnections/2; n++) {
+          // Move the tail of the buffers to the front. This section
+          // represents data that might have to be plotted again if a
+          // trigger occurs and we have a trigger delay set.  The tail
+          // section is between (d_end-d_trigger_delay) and d_end.
+          memmove(d_cbuffers[n], &d_cbuffers[n][d_end-d_trigger_delay],
+                  d_trigger_delay*sizeof(gr_complex));
+
+          // Also move the offsets of any tags that occur in the tail
+          // section so they would be plotted again, too.
           std::vector<gr::tag_t> tmp_tags;
           for(size_t t = 0; t < d_tags[n].size(); t++) {
             if(d_tags[n][t].offset > (uint64_t)(d_size - d_trigger_delay)) {
@@ -508,7 +550,7 @@ namespace gr {
       uint64_t nr = nitems_read(d_trigger_channel/2);
       std::vector<gr::tag_t> tags;
       get_tags_in_range(tags, d_trigger_channel/2,
-                        nr, nr + nitems,
+                        nr, nr + nitems + 1,
                         d_trigger_tag_key);
       if(tags.size() > 0) {
         d_triggered = true;
@@ -572,13 +614,13 @@ namespace gr {
 			   gr_vector_const_void_star &input_items,
 			   gr_vector_void_star &output_items)
     {
-      int n=0, idx=0;
+      int n=0;
       const gr_complex *in;
 
       _npoints_resize();
       _gui_update_trigger();
 
-      gr::thread::scoped_lock lock(d_mutex);
+      gr::thread::scoped_lock lock(d_setlock);
 
       int nfill = d_end - d_index;                 // how much room left in buffers
       int nitems = std::min(noutput_items, nfill); // num items we can put in buffers
@@ -596,28 +638,26 @@ namespace gr {
       }
 
       // Copy data into the buffers.
-      for(n = 0; n < d_nconnections; n+=2) {
-        in = (const gr_complex*)input_items[idx];
-        volk_32fc_deinterleave_64f_x2(&d_buffers[n][d_index],
-                                      &d_buffers[n+1][d_index],
-                                      &in[0], nitems);
+      for(n = 0; n < d_nconnections/2; n++) {
+        in = (const gr_complex*)input_items[n];
+        memcpy(&d_cbuffers[n][d_index], &in[1], nitems*sizeof(gr_complex));
 
-        uint64_t nr = nitems_read(idx);
+        uint64_t nr = nitems_read(n);
         std::vector<gr::tag_t> tags;
-        get_tags_in_range(tags, idx, nr, nr + nitems);
+        get_tags_in_range(tags, n, nr, nr + nitems + 1);
         for(size_t t = 0; t < tags.size(); t++) {
-          tags[t].offset = tags[t].offset - nr + (d_index-d_start);
+          tags[t].offset = tags[t].offset - nr + (d_index-d_start-1);
         }
-        d_tags[idx].insert(d_tags[idx].end(), tags.begin(), tags.end());
-        idx++;
+        d_tags[n].insert(d_tags[n].end(), tags.begin(), tags.end());
       }
       d_index += nitems;
 
       // If we've have a trigger and a full d_size of items in the buffers, plot.
       if((d_triggered) && (d_index == d_end)) {
         // Copy data to be plotted to start of buffers.
-        for(n = 0; n < d_nconnections; n++) {
-          memmove(d_buffers[n], &d_buffers[n][d_start], d_size*sizeof(double));
+        for(n = 0; n < d_nconnections/2; n++) {
+          volk_32fc_deinterleave_64f_x2(d_buffers[2*n+0], d_buffers[2*n+1],
+                                        &d_cbuffers[n][d_start], d_size);
         }
 
         // Plot if we are able to update

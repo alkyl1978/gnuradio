@@ -25,13 +25,13 @@ class Connection(Element):
     def __init__(self, flow_graph, porta, portb):
         """
         Make a new connection given the parent and 2 ports.
-        
+
         Args:
             flow_graph: the parent of this element
             porta: a port (any direction)
             portb: a port (any direction)
         @throws Error cannot make connection
-        
+
         Returns:
             a new connection
         """
@@ -55,10 +55,10 @@ class Connection(Element):
         self._source = source
         self._sink = sink
         if source.get_type() == 'bus':
-            
+
             sources = source.get_associated_ports();
             sinks = sink.get_associated_ports();
-            
+
             for i in range(len(sources)):
                 try:
                     flow_graph.connect(sources[i], sinks[i]);
@@ -81,15 +81,33 @@ class Connection(Element):
         The ports must match in type.
         """
         Element.validate(self)
-        source_type = self.get_source().get_type()
-        sink_type = self.get_sink().get_type()
-        if source_type != sink_type:
-            self.add_error_message('Source type "%s" does not match sink type "%s".'%(source_type, sink_type))
+        platform = self.get_parent().get_parent()
+        source_domain = self.get_source().get_domain()
+        sink_domain = self.get_sink().get_domain()
+        if (source_domain, sink_domain) not in platform.get_connection_templates():
+            self.add_error_message('No connection known for domains "%s", "%s"'
+                                   % (source_domain, sink_domain))
+        too_many_other_sinks = (
+            source_domain in platform.get_domains() and
+            not platform.get_domain(key=source_domain)['multiple_sinks'] and
+            len(self.get_source().get_enabled_connections()) > 1
+        )
+        too_many_other_sources = (
+            sink_domain in platform.get_domains() and
+            not platform.get_domain(key=sink_domain)['multiple_sources'] and
+            len(self.get_sink().get_enabled_connections()) > 1
+        )
+        if too_many_other_sinks:
+            self.add_error_message(
+                'Domain "%s" can have only one downstream block' % source_domain)
+        if too_many_other_sources:
+            self.add_error_message(
+                'Domain "%s" can have only one upstream block' % sink_domain)
 
     def get_enabled(self):
         """
         Get the enabled state of this connection.
-        
+
         Returns:
             true if source and sink blocks are enabled
         """
@@ -108,7 +126,7 @@ class Connection(Element):
     def export_data(self):
         """
         Export this connection's info.
-        
+
         Returns:
             a nested data odict
         """

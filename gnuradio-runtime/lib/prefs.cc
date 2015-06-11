@@ -1,6 +1,6 @@
 /* -*- c++ -*- */
 /*
- * Copyright 2006,2013 Free Software Foundation, Inc.
+ * Copyright 2006,2013,2015 Free Software Foundation, Inc.
  *
  * This file is part of GNU Radio
  *
@@ -36,27 +36,20 @@ namespace fs = boost::filesystem;
 
 namespace gr {
 
-  /*
-   * Stub implementations
-   */
-  static prefs s_default_singleton;
-  static prefs *s_singleton = &s_default_singleton;
-
   prefs *
   prefs::singleton()
   {
-    return s_singleton;
-  }
-
-  void
-  prefs::set_singleton(prefs *p)
-  {
-    s_singleton = p;
+    static prefs instance; // Guaranteed to be destroyed.
+                            // Instantiated on first use.
+    return &instance;
   }
 
   prefs::prefs()
   {
-    _read_files();
+    std::string config = _read_files(_sys_prefs_filenames());
+
+    // Convert the string into a map
+    _convert_to_map(config);
   }
 
   prefs::~prefs()
@@ -93,13 +86,12 @@ namespace gr {
     return fnames;
   }
 
-  void
-  prefs::_read_files()
+  std::string
+  prefs::_read_files(const std::vector<std::string> &filenames)
   {
     std::string config;
 
-    std::vector<std::string> filenames = _sys_prefs_filenames();
-    std::vector<std::string>::iterator sitr;
+    std::vector<std::string>::const_iterator sitr;
     char tmp[1024];
     for(sitr = filenames.begin(); sitr != filenames.end(); sitr++) {
       fs::ifstream fin(*sitr);
@@ -152,8 +144,7 @@ namespace gr {
       fin.close();
     }
 
-    // Convert the string into a map
-    _convert_to_map(config);
+    return config;
   }
 
   void
@@ -197,6 +188,17 @@ namespace gr {
       sec_start = sub.find("[", sec_end);
     }
   }
+
+  void
+  prefs::add_config_file(const std::string &configfile)
+  {
+    std::vector<std::string> filenames;
+    filenames.push_back(configfile);
+
+    std::string config = _read_files(filenames);
+    _convert_to_map(config);
+  }
+
 
   std::string
   prefs::to_string()

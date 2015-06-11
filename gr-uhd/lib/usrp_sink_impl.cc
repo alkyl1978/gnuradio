@@ -1,6 +1,6 @@
 /* -*- c++ -*- */
 /*
- * Copyright 2010-2013 Free Software Foundation, Inc.
+ * Copyright 2010-2015 Free Software Foundation, Inc.
  *
  * This file is part of GNU Radio
  *
@@ -25,10 +25,11 @@
 #include "usrp_sink_impl.h"
 #include "gr_uhd_common.h"
 #include <gnuradio/io_signature.h>
-#include <boost/make_shared.hpp>
 
 namespace gr {
   namespace uhd {
+
+    static const size_t ALL_CHANS = ::uhd::usrp::multi_usrp::ALL_CHANS;
 
     usrp_sink::sptr
     usrp_sink::make(const ::uhd::device_addr_t &device_addr,
@@ -63,37 +64,14 @@ namespace gr {
     usrp_sink_impl::usrp_sink_impl(const ::uhd::device_addr_t &device_addr,
                                    const ::uhd::stream_args_t &stream_args,
                                    const std::string &length_tag_name)
-      : sync_block("gr uhd usrp sink",
+      : usrp_block("gr uhd usrp sink",
                       args_to_io_sig(stream_args),
                       io_signature::make(0, 0, 0)),
-        _stream_args(stream_args),
-        _nchan(stream_args.channels.size()),
-        _stream_now(_nchan == 1 and length_tag_name.empty()),
-        _start_time_set(false),
+        usrp_block_impl(device_addr, stream_args, length_tag_name),
         _length_tag_key(length_tag_name.empty() ? pmt::PMT_NIL : pmt::string_to_symbol(length_tag_name)),
-        _nitems_to_send(0),
-	_curr_freq(stream_args.channels.size(), 0.0),
-	_curr_lo_offset(stream_args.channels.size(), 0.0),
-	_curr_gain(stream_args.channels.size(), 0.0),
-	_chans_to_tune(stream_args.channels.size(), false),
-	_call_tune(false)
+        _nitems_to_send(0)
     {
-      if(stream_args.cpu_format == "fc32")
-        _type = boost::make_shared< ::uhd::io_type_t >(::uhd::io_type_t::COMPLEX_FLOAT32);
-      if(stream_args.cpu_format == "sc16")
-        _type = boost::make_shared< ::uhd::io_type_t >(::uhd::io_type_t::COMPLEX_INT16);
-      _dev = ::uhd::usrp::multi_usrp::make(device_addr);
-
-      message_port_register_in(pmt::mp("command"));
-      set_msg_handler(
-	  pmt::mp("command"),
-	  boost::bind(&usrp_sink_impl::msg_handler_command, this, _1)
-      );
-      //message_port_register_in(pmt::mp("query"));
-      //set_msg_handler(
-	  //pmt::mp("query"),
-	  //boost::bind(&usrp_sink_impl::msg_handler_query, this, _1)
-      //);
+      _sample_rate = get_samp_rate();
     }
 
     usrp_sink_impl::~usrp_sink_impl()
@@ -154,39 +132,12 @@ namespace gr {
     usrp_sink_impl::set_center_freq(const ::uhd::tune_request_t tune_request,
                                     size_t chan)
     {
-      _curr_freq[chan] = tune_request.target_freq;
-      if (tune_request.rf_freq_policy == ::uhd::tune_request_t::POLICY_MANUAL) {
-        _curr_lo_offset[chan] = tune_request.rf_freq - tune_request.target_freq;
-      } else {
-        _curr_lo_offset[chan] = 0.0;
-      }
+      _curr_tune_req[chan] = tune_request;
       chan = _stream_args.channels[chan];
       return _dev->set_tx_freq(tune_request, chan);
     }
 
-    ::uhd::tune_result_t
-    usrp_sink_impl::_set_center_freq_from_internals(size_t chan)
-    {
-      _chans_to_tune[chan] = false;
-      if (_curr_lo_offset[chan] == 0.0) {
-	return _dev->set_tx_freq(_curr_freq[chan], _stream_args.channels[chan]);
-      } else {
-	return _dev->set_tx_freq(
-	    ::uhd::tune_request_t(_curr_freq[chan], _curr_lo_offset[chan]),
-	    _stream_args.channels[chan]
-	);
-      }
-    }
-
-    void
-    usrp_sink_impl::_set_center_freq_from_internals_allchans()
-    {
-      for (size_t chan = 0; chan < _nchan; chan++) {
-        if (_chans_to_tune[chan]) {
-          _set_center_freq_from_internals(chan);
-        }
-      }
-    }
+    SET_CENTER_FREQ_FROM_INTERNALS(usrp_sink_impl, set_tx_freq);
 
     double
     usrp_sink_impl::get_center_freq(size_t chan)
@@ -205,7 +156,6 @@ namespace gr {
     void
     usrp_sink_impl::set_gain(double gain, size_t chan)
     {
-      _curr_gain[chan] = gain;
       chan = _stream_args.channels[chan];
       return _dev->set_tx_gain(gain, chan);
     }
@@ -215,9 +165,18 @@ namespace gr {
                              const std::string &name,
                              size_t chan)
     {
-      _curr_gain[chan] = gain;
       chan = _stream_args.channels[chan];
       return _dev->set_tx_gain(gain, name, chan);
+    }
+
+    void usrp_sink_impl::set_normalized_gain(double norm_gain, size_t chan)
+    {
+      if (norm_gain > 1.0 || norm_gain < 0.0) {
+        throw std::runtime_error("Normalized gain out of range, must be in [0, 1].");
+      }
+      ::uhd::gain_range_t gain_range = get_gain_range(chan);
+      double abs_gain = (norm_gain * (gain_range.stop() - gain_range.start())) + gain_range.start();
+      set_gain(abs_gain, chan);
     }
 
     double
@@ -232,6 +191,19 @@ namespace gr {
     {
       chan = _stream_args.channels[chan];
       return _dev->get_tx_gain(name, chan);
+    }
+
+    double
+    usrp_sink_impl::get_normalized_gain(size_t chan)
+    {
+      ::uhd::gain_range_t gain_range = get_gain_range(chan);
+      double norm_gain =
+        (get_gain(chan) - gain_range.start()) /
+        (gain_range.stop() - gain_range.start());
+      // Avoid rounding errors:
+      if (norm_gain > 1.0) return 1.0;
+      if (norm_gain < 0.0) return 0.0;
+      return norm_gain;
     }
 
     std::vector<std::string>
@@ -337,152 +309,6 @@ namespace gr {
       return _dev->get_tx_sensor_names(chan);
     }
 
-    ::uhd::sensor_value_t
-    usrp_sink_impl::get_mboard_sensor(const std::string &name,
-                                       size_t mboard)
-    {
-      return _dev->get_mboard_sensor(name, mboard);
-    }
-
-    std::vector<std::string>
-    usrp_sink_impl::get_mboard_sensor_names(size_t mboard)
-    {
-      return _dev->get_mboard_sensor_names(mboard);
-    }
-
-    void
-    usrp_sink_impl::set_clock_config(const ::uhd::clock_config_t &clock_config,
-                                     size_t mboard)
-    {
-      return _dev->set_clock_config(clock_config, mboard);
-    }
-
-    void
-    usrp_sink_impl::set_time_source(const std::string &source,
-                                    const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->set_time_source(source, mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    std::string
-    usrp_sink_impl::get_time_source(const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->get_time_source(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    std::vector<std::string>
-    usrp_sink_impl::get_time_sources(const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->get_time_sources(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    void
-    usrp_sink_impl::set_clock_source(const std::string &source,
-                                     const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->set_clock_source(source, mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    std::string
-    usrp_sink_impl::get_clock_source(const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->get_clock_source(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    std::vector<std::string>
-    usrp_sink_impl::get_clock_sources(const size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_REF_SOURCES_API
-      return _dev->get_clock_sources(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    double
-    usrp_sink_impl::get_clock_rate(size_t mboard)
-    {
-      return _dev->get_master_clock_rate(mboard);
-    }
-
-    void
-    usrp_sink_impl::set_clock_rate(double rate, size_t mboard)
-    {
-      return _dev->set_master_clock_rate(rate, mboard);
-    }
-
-    ::uhd::time_spec_t
-    usrp_sink_impl::get_time_now(size_t mboard)
-    {
-      return _dev->get_time_now(mboard);
-    }
-
-    ::uhd::time_spec_t
-    usrp_sink_impl::get_time_last_pps(size_t mboard)
-    {
-      return _dev->get_time_last_pps(mboard);
-    }
-
-    void
-    usrp_sink_impl::set_time_now(const ::uhd::time_spec_t &time_spec,
-                                 size_t mboard)
-    {
-      return _dev->set_time_now(time_spec, mboard);
-    }
-
-    void
-    usrp_sink_impl::set_time_next_pps(const ::uhd::time_spec_t &time_spec)
-    {
-      return _dev->set_time_next_pps(time_spec);
-    }
-
-    void
-    usrp_sink_impl::set_time_unknown_pps(const ::uhd::time_spec_t &time_spec)
-    {
-      return _dev->set_time_unknown_pps(time_spec);
-    }
-
-    void
-    usrp_sink_impl::set_command_time(const ::uhd::time_spec_t &time_spec,
-                                     size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_COMMAND_TIME_API
-      return _dev->set_command_time(time_spec, mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
-    void
-    usrp_sink_impl::clear_command_time(size_t mboard)
-    {
-#ifdef UHD_USRP_MULTI_USRP_COMMAND_TIME_API
-      return _dev->clear_command_time(mboard);
-#else
-      throw std::runtime_error("not implemented in this version");
-#endif
-    }
-
     ::uhd::usrp::dboard_iface::sptr
     usrp_sink_impl::get_dboard_iface(size_t chan)
     {
@@ -490,24 +316,16 @@ namespace gr {
       return _dev->get_tx_dboard_iface(chan);
     }
 
-    ::uhd::usrp::multi_usrp::sptr
-    usrp_sink_impl::get_device(void)
-    {
-      return _dev;
-    }
-
     void
-    usrp_sink_impl::set_user_register(const uint8_t addr,
-                                      const uint32_t data,
-                                      size_t mboard)
+    usrp_sink_impl::set_stream_args(const ::uhd::stream_args_t &stream_args)
     {
-#ifdef UHD_USRP_MULTI_USRP_USER_REGS_API
-      _dev->set_user_register(addr, data, mboard);
+      _update_stream_args(stream_args);
+#ifdef GR_UHD_USE_STREAM_API
+      _tx_stream.reset();
 #else
       throw std::runtime_error("not implemented in this version");
 #endif
     }
-
 
     /***********************************************************************
      * Work
@@ -561,7 +379,7 @@ namespace gr {
 #endif
 
       //if using length_tags, decrement items left to send by the number of samples sent
-      if(not pmt::is_null(_length_tag_key) and _nitems_to_send > 0) {
+      if(not pmt::is_null(_length_tag_key) && _nitems_to_send > 0) {
         _nitems_to_send -= long(num_sent);
       }
 
@@ -569,9 +387,12 @@ namespace gr {
       _metadata.time_spec += ::uhd::time_spec_t(0, num_sent, _sample_rate);
 
       // Some post-processing tasks if we actually transmitted the entire burst
-      if (_call_tune and num_sent == size_t(ninput_items)) {
-	_set_center_freq_from_internals_allchans();
-	_call_tune = false;
+      if (not _pending_cmds.empty() && num_sent == size_t(ninput_items)) {
+        GR_LOG_DEBUG(d_debug_logger, boost::format("Executing %d pending commands.") % _pending_cmds.size());
+        BOOST_FOREACH(const pmt::pmt_t &cmd_pmt, _pending_cmds) {
+          msg_handler_command(cmd_pmt);
+        }
+        _pending_cmds.clear();
       }
 
       return num_sent;
@@ -593,10 +414,9 @@ namespace gr {
       // Go through tag list until something indicates the end of a burst.
       bool found_time_tag = false;
       bool found_eob = false;
-      bool found_freq_tag_in_burst = false;
-      uint64_t freq_cmd_offset = 0;
-      double freq_cmd_freq;
-      int freq_cmd_chan;
+      // For commands that are in the middle of the burst:
+      std::vector<pmt::pmt_t> commands_in_burst; // Store the command
+      uint64_t in_burst_cmd_offset = 0; // Store its position
       BOOST_FOREACH(const tag_t &my_tag, _tags) {
         const uint64_t my_tag_count = my_tag.offset;
         const pmt::pmt_t &key = my_tag.key;
@@ -605,15 +425,12 @@ namespace gr {
         if (my_tag_count >= max_count) {
           break;
         }
-	else if (not pmt::is_null(_length_tag_key) and my_tag_count > samp0_count + _nitems_to_send) {
-          break;
-	}
 
-        /* I. Bursts that can only be on the first sample of burst
+        /* I. Tags that can only be on the first sample of a burst
          *
          * This includes:
          * - tx_time
-         * - tx_command
+         * - tx_command TODO should also work end-of-burst
          * - tx_sob
          * - length tags
          *
@@ -625,6 +442,7 @@ namespace gr {
             max_count = my_tag_count;
             break;
           }
+          // TODO set the command time from the sample time
           msg_handler_command(value);
         }
 
@@ -634,7 +452,7 @@ namespace gr {
             max_count = my_tag_count;
             break;
           }
-	  found_time_tag = true;
+          found_time_tag = true;
           _metadata.has_time_spec = true;
           _metadata.time_spec = ::uhd::time_spec_t
             (pmt::to_uint64(pmt::tuple_ref(value, 0)),
@@ -642,94 +460,95 @@ namespace gr {
         }
 
         //set the start of burst flag in the metadata; ignore if length_tag_key is not null
-        else if(pmt::is_null(_length_tag_key) and pmt::equal(key, SOB_KEY)) {
+        else if(pmt::is_null(_length_tag_key) && pmt::equal(key, SOB_KEY)) {
           if (my_tag.offset != samp0_count) {
             max_count = my_tag_count;
             break;
           }
-	  // Bursty tx will not use time specs, unless a tx_time tag is also given.
-	  _metadata.has_time_spec = false;
+          // Bursty tx will not use time specs, unless a tx_time tag is also given.
+          _metadata.has_time_spec = false;
           _metadata.start_of_burst = pmt::to_bool(value);
         }
 
         //length_tag found; set the start of burst flag in the metadata
-        else if(not pmt::is_null(_length_tag_key) and pmt::equal(key, _length_tag_key)) {
+        else if(not pmt::is_null(_length_tag_key) && pmt::equal(key, _length_tag_key)) {
           if (my_tag_count != samp0_count) {
             max_count = my_tag_count;
-	    break;
+            break;
           }
           //If there are still items left to send, the current burst has been preempted.
           //Set the items remaining counter to the new burst length. Notify the user of
           //the tag preemption.
-	  else if(_nitems_to_send > 0) {
+          else if(_nitems_to_send > 0) {
               std::cerr << "tP" << std::flush;
           }
           _nitems_to_send = pmt::to_long(value);
           _metadata.start_of_burst = true;
         }
 
-        /* II. Bursts that can be on the first OR last sample of a burst
+        /* II. Tags that can be on the first OR last sample of a burst
          *
          * This includes:
-         * - tx_freq (tags that don't actually change the frequency are ignored)
+         * - tx_freq
          *
          * With these tags, we check if they're at the start of a burst, and do
          * the appropriate action. Otherwise, make sure the corresponding sample
          * is the last one.
          */
-	else if (pmt::equal(key, FREQ_KEY) and my_tag_count == samp0_count) {
-          int chan = pmt::to_long(pmt::tuple_ref(value, 0));
-          double new_freq = pmt::to_double(pmt::tuple_ref(value, 1));
-          if (new_freq != _curr_freq[chan]) {
-	      _curr_freq[chan] = new_freq;
-	      _set_center_freq_from_internals(chan);
-	  }
-	}
-
-        else if(pmt::equal(key, FREQ_KEY) and not found_freq_tag_in_burst) {
-          int chan = pmt::to_long(pmt::tuple_ref(value, 0));
-          double new_freq = pmt::to_double(pmt::tuple_ref(value, 1));
-          if (new_freq != _curr_freq[chan]) {
-	    freq_cmd_freq = new_freq;
-            freq_cmd_chan = chan;
-	    freq_cmd_offset = my_tag_count;
-	    max_count = my_tag_count + 1;
-	    found_freq_tag_in_burst = true;
-          }
+        else if (pmt::equal(key, FREQ_KEY) && my_tag_count == samp0_count) {
+          // If it's on the first sample, immediately do the tune:
+          GR_LOG_DEBUG(d_debug_logger, boost::format("Received tx_freq on start of burst."));
+          pmt::pmt_t freq_cmd = pmt::make_dict();
+          freq_cmd = pmt::dict_add(freq_cmd, pmt::mp("freq"), value);
+          msg_handler_command(freq_cmd);
+        }
+        else if(pmt::equal(key, FREQ_KEY)) {
+          // If it's not on the first sample, queue this command and only tx until here:
+          GR_LOG_DEBUG(d_debug_logger, boost::format("Received tx_freq mid-burst."));
+          pmt::pmt_t freq_cmd = pmt::make_dict();
+          freq_cmd = pmt::dict_add(freq_cmd, pmt::mp("freq"), value);
+          commands_in_burst.push_back(freq_cmd);
+          max_count = my_tag_count + 1;
+          in_burst_cmd_offset = my_tag_count;
         }
 
-        /* III. Bursts that can only be on the last sample of a burst
+        /* III. Tags that can only be on the last sample of a burst
          *
          * This includes:
          * - tx_eob
          *
          * Make sure that no more samples are allowed through.
          */
-        else if(pmt::is_null(_length_tag_key) and pmt::equal(key, EOB_KEY)) {
+        else if(pmt::is_null(_length_tag_key) && pmt::equal(key, EOB_KEY)) {
           found_eob = true;
           max_count = my_tag_count + 1;
           _metadata.end_of_burst = pmt::to_bool(value);
         }
       } // end foreach
 
-      if(not pmt::is_null(_length_tag_key) and long(max_count - samp0_count) == _nitems_to_send) {
+      if(not pmt::is_null(_length_tag_key) && long(max_count - samp0_count) == _nitems_to_send) {
         found_eob = true;
       }
 
-      if (found_freq_tag_in_burst) {
+      // If a command was found in-burst that may appear at the end of burst,
+      // there's two options:
+      // 1) The command was actually on the last sample (eob). Then, stash the
+      //    commands for running after work().
+      // 2) The command was not on the last sample. In this case, only send()
+      //    until before the tag, so it will be on the first sample of the next run.
+      if (not commands_in_burst.empty()) {
         if (not found_eob) {
-          // If it's in the middle of a burst, only send() until before the tag
-          max_count = freq_cmd_offset;
-        } else if (freq_cmd_offset < max_count) {
-          // Otherwise, tune after work()
-	  _curr_freq[freq_cmd_chan] = freq_cmd_freq;
-	  _chans_to_tune[freq_cmd_chan] = true;
-          _call_tune = true;
+          // ...then it's in the middle of a burst, only send() until before the tag
+          max_count = in_burst_cmd_offset;
+        } else if (in_burst_cmd_offset < max_count) {
+          BOOST_FOREACH(const pmt::pmt_t &cmd_pmt, commands_in_burst) {
+            _pending_cmds.push_back(cmd_pmt);
+          }
         }
       }
 
       if (found_time_tag) {
-	_metadata.has_time_spec = true;
+        _metadata.has_time_spec = true;
       }
 
       // Only transmit up to and including end of burst,
@@ -758,14 +577,14 @@ namespace gr {
       _metadata.start_of_burst = true;
       _metadata.end_of_burst = false;
       // Bursty tx will need to send a tx_time to activate time spec
-      _metadata.has_time_spec = not _stream_now and pmt::is_null(_length_tag_key);
+      _metadata.has_time_spec = !_stream_now && pmt::is_null(_length_tag_key);
       _nitems_to_send = 0;
       if(_start_time_set) {
         _start_time_set = false; //cleared for next run
         _metadata.time_spec = _start_time;
       }
       else {
-        _metadata.time_spec = get_time_now() + ::uhd::time_spec_t(0.01);
+        _metadata.time_spec = get_time_now() + ::uhd::time_spec_t(0.15);
       }
 
 #ifdef GR_UHD_USE_STREAM_API
@@ -797,72 +616,6 @@ namespace gr {
          *_type, ::uhd::device::SEND_MODE_ONE_PACKET, 1.0);
 #endif
       return true;
-    }
-
-
-    /************** External interfaces (RPC + Message passing) ********************/
-    // Helper function for msg_handler_command: Extracts chan and command value from
-    // the 2-tuple in cmd_val, updates the value in vector_to_update[chan] and returns
-    // true if it was different from the old value.
-    bool _unpack_chan_command(pmt::pmt_t &cmd_val, int &chan, std::vector<double> &vector_to_update)
-    {
-      chan = pmt::to_long(pmt::tuple_ref(cmd_val, 0));
-      double new_value = pmt::to_double(pmt::tuple_ref(cmd_val, 1));
-      if (new_value == vector_to_update[chan]) {
-	return false;
-      } else {
-	vector_to_update[chan] = new_value;
-	return true;
-      }
-    }
-
-    void usrp_sink_impl::msg_handler_command(pmt::pmt_t msg)
-    {
-      const std::string command(pmt::symbol_to_string(pmt::car(msg)));
-      pmt::pmt_t value(pmt::cdr(msg));
-      int chan = 0;
-      if (command == "freq") {
-	if (_unpack_chan_command(value, chan, _curr_freq)) {
-	  _set_center_freq_from_internals(chan);
-	}
-      } else if (command == "lo_offset") {
-	if (_unpack_chan_command(value, chan, _curr_lo_offset)) {
-	  _set_center_freq_from_internals(chan);
-	}
-      } else if (command == "gain") {
-	if (_unpack_chan_command(value, chan, _curr_gain)) {
-	  set_gain(_curr_gain[chan], chan);
-	}
-      } else {
-	GR_LOG_ALERT(d_logger, boost::format("Received unknown command: %s") % command);
-      }
-    }
-
-    void usrp_sink_impl::msg_handler_query(pmt::pmt_t msg)
-    {
-      //tbi
-    }
-
-    void
-    usrp_sink_impl::setup_rpc()
-    {
-#ifdef GR_CTRLPORT
-      add_rpc_variable(
-        rpcbasic_sptr(new rpcbasic_register_get<usrp_sink, double>(
-	  alias(), "samp_rate",
-	  &usrp_sink::get_samp_rate,
-	  pmt::mp(100000.0f), pmt::mp(25000000.0f), pmt::mp(1000000.0f),
-	  "sps", "TX Sample Rate", RPC_PRIVLVL_MIN,
-          DISPTIME | DISPOPTSTRIP)));
-
-      add_rpc_variable(
-        rpcbasic_sptr(new rpcbasic_register_set<usrp_sink, double>(
-	  alias(), "samp_rate",
-	  &usrp_sink::set_samp_rate,
-	  pmt::mp(100000.0f), pmt::mp(25000000.0f), pmt::mp(1000000.0f),
-	  "sps", "TX Sample Rate",
-	  RPC_PRIVLVL_MIN, DISPNULL)));
-#endif /* GR_CTRLPORT */
     }
 
   } /* namespace uhd */

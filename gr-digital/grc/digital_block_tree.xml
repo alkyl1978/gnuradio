@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!--
- Copyright 2011-2013 Free Software Foundation, Inc.
+ Copyright 2011-2015 Free Software Foundation, Inc.
 
  This file is part of GNU Radio
 
@@ -63,6 +63,7 @@
     <block>digital_constellation_receiver_cb</block>
     <block>variable_constellation</block>
     <block>variable_constellation_rect</block>
+    <block>variable_modulate_vector</block>
   </cat>
   <cat>
     <name>Packet Operators</name>
@@ -85,7 +86,6 @@
   <cat>
     <name>OFDM</name>
     <block>digital_ofdm_mod</block>
-    <block>digital_ofdm_mod2</block>
     <block>digital_ofdm_demod</block>
     <block>digital_ofdm_carrier_allocator_cvc</block>
     <block>digital_ofdm_chanest_vcvc</block>
@@ -121,6 +121,7 @@
     <block>digital_mpsk_receiver_cc</block>
     <block>digital_pfb_clock_sync_xxx</block>
     <block>digital_pn_correlator_cc</block>
+    <block>digital_corr_est_cc</block>
     <block>digital_correlate_and_sync_cc</block>
   </cat>
   <cat>

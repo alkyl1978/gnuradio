@@ -71,7 +71,7 @@ class packet_encoder(gr.hier_block2):
     def __init__(self, samples_per_symbol, bits_per_symbol, preamble='', access_code='', pad_for_usrp=True):
         """
         packet_mod constructor.
-        
+
         Args:
             samples_per_symbol: number of samples per symbol
             bits_per_symbol: number of bits per symbol
@@ -110,7 +110,7 @@ class packet_encoder(gr.hier_block2):
     def send_pkt(self, payload):
         """
         Wrap the payload in a packet and push onto the message queue.
-        
+
         Args:
             payload: string, data to send
         """
@@ -153,7 +153,7 @@ class packet_decoder(gr.hier_block2):
     def __init__(self, access_code='', threshold=-1, callback=None):
         """
         packet_demod constructor.
-        
+
         Args:
             access_code: AKA sync vector
             threshold: detect access_code with up to threshold bits wrong (0 -> use default)
@@ -202,7 +202,7 @@ class packet_mod_base(gr.hier_block2):
             self,
             "ofdm_mod",
             gr.io_signature(1, 1, self._item_size_in), # Input signature
-            gr.io_signature(1, 1, packet_source._hb.output_signature().sizeof_stream_item(0)) # Output signature
+            gr.io_signature(1, 1, packet_source.output_signature().sizeof_stream_item(0)) # Output signature
         )
         #create blocks
         msgq = gr.msg_queue(DEFAULT_MSGQ_LIMIT)
@@ -232,7 +232,7 @@ class packet_demod_base(gr.hier_block2):
         gr.hier_block2.__init__(
             self,
             "ofdm_mod",
-            gr.io_signature(1, 1, packet_sink._hb.input_signature().sizeof_stream_item(0)), # Input signature
+            gr.io_signature(1, 1, packet_sink.input_signature().sizeof_stream_item(0)), # Input signature
             gr.io_signature(1, 1, self._item_size_out) # Output signature
         )
         #create blocks
@@ -241,9 +241,9 @@ class packet_demod_base(gr.hier_block2):
         #connect
         self.connect(self, packet_sink)
         self.connect(msg_source, self)
-        if packet_sink._hb.output_signature().sizeof_stream_item(0):
+        if packet_sink.output_signature().sizeof_stream_item(0):
             self.connect(packet_sink,
-                         blocks.null_sink(packet_sink._hb.output_signature().sizeof_stream_item(0)))
+                         blocks.null_sink(packet_sink.output_signature().sizeof_stream_item(0)))
 
     def recv_pkt(self, ok, payload):
         msg = gr.message_from_string(payload, 0, self._item_size_out,

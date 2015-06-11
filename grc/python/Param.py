@@ -57,7 +57,7 @@ class Param(_Param, _GUIParam):
         'complex', 'real', 'float', 'int',
         'complex_vector', 'real_vector', 'float_vector', 'int_vector',
         'hex', 'string', 'bool',
-        'file_open', 'file_save',
+        'file_open', 'file_save', 'multiline',
         'id', 'stream_id',
         'grid_pos', 'notebook', 'gui_hint',
         'import',
@@ -66,7 +66,7 @@ class Param(_Param, _GUIParam):
     def __repr__(self):
         """
         Get the repr (nice string format) for this param.
-        
+
         Returns:
             the string representation
         """
@@ -125,7 +125,7 @@ class Param(_Param, _GUIParam):
     def get_color(self):
         """
         Get the color that represents this param's type.
-        
+
         Returns:
             a hex color code.
         """
@@ -160,7 +160,7 @@ class Param(_Param, _GUIParam):
         If the parameter controls a port type, vlen, or nports, return part.
         If the parameter is an empty grid position, return part.
         These parameters are redundant to display in the flow graph view.
-        
+
         Returns:
             hide the hide property string
         """
@@ -198,7 +198,7 @@ class Param(_Param, _GUIParam):
     def evaluate(self):
         """
         Evaluate the value.
-        
+
         Returns:
             evaluated type
         """
@@ -206,14 +206,6 @@ class Param(_Param, _GUIParam):
         self._lisitify_flag = False
         self._stringify_flag = False
         self._hostage_cells = list()
-        def eval_string(v):
-            try:
-                e = self.get_parent().get_parent().evaluate(v)
-                if isinstance(e, str): return e
-                raise Exception #want to stringify
-            except:
-                self._stringify_flag = True
-                return v
         t = self.get_type()
         v = self.get_value()
         #########################
@@ -280,9 +272,15 @@ class Param(_Param, _GUIParam):
         #########################
         # String Types
         #########################
-        elif t in ('string', 'file_open', 'file_save'):
+        elif t in ('string', 'file_open', 'file_save', 'multiline'):
             #do not check if file/directory exists, that is a runtime issue
-            e = eval_string(v)
+            try:
+                e = self.get_parent().get_parent().evaluate(v)
+                if not isinstance(e, str):
+                    raise Exception()
+            except:
+                self._stringify_flag = True
+                e = v
             return str(e)
         #########################
         # Unique ID Type
@@ -407,13 +405,13 @@ class Param(_Param, _GUIParam):
         Convert the value to code.
         For string and list types, check the init flag, call evaluate().
         This ensures that evaluate() was called to set the xxxify_flags.
-        
+
         Returns:
             a string representing the code
         """
         v = self.get_value()
         t = self.get_type()
-        if t in ('string', 'file_open', 'file_save'): #string types
+        if t in ('string', 'file_open', 'file_save', 'multiline'): #string types
             if not self._init: self.evaluate()
             if self._stringify_flag: return '"%s"'%v.replace('"', '\"')
             else: return v
@@ -426,10 +424,10 @@ class Param(_Param, _GUIParam):
     def get_all_params(self, type):
         """
         Get all the params from the flowgraph that have the given type.
-        
+
         Args:
             type: the specified type
-        
+
         Returns:
             a list of params
         """

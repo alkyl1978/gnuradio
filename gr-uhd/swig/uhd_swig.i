@@ -1,6 +1,6 @@
 /* -*- c++ -*- */
 /*
- * Copyright 2010-2013 Free Software Foundation, Inc.
+ * Copyright 2010-2014 Free Software Foundation, Inc.
  *
  * This file is part of GNU Radio
  *
@@ -40,6 +40,12 @@
 %include "uhd_swig_doc.i"
 
 ////////////////////////////////////////////////////////////////////////
+// SWIG should not see the uhd::usrp::multi_usrp class
+////////////////////////////////////////////////////////////////////////
+%ignore gr::uhd::usrp_sink::get_device;
+%ignore gr::uhd::usrp_source::get_device;
+
+////////////////////////////////////////////////////////////////////////
 // block headers
 ////////////////////////////////////////////////////////////////////////
 %{
@@ -47,6 +53,8 @@
 #include <gnuradio/uhd/usrp_sink.h>
 #include <gnuradio/uhd/amsg_source.h>
 %}
+
+%include "gnuradio/uhd/usrp_block.h"
 
 ////////////////////////////////////////////////////////////////////////
 // used types

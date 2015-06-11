@@ -25,18 +25,15 @@
 
 #include <gnuradio/qtgui/histogram_sink_f.h>
 #include <gnuradio/qtgui/histogramdisplayform.h>
-#include <gnuradio/thread/thread.h>
 #include <gnuradio/high_res_timer.h>
 
 namespace gr {
   namespace qtgui {
-    
+
     class QTGUI_API histogram_sink_f_impl : public histogram_sink_f
     {
     private:
       void initialize();
-
-      gr::thread::mutex d_mutex;
 
       int d_size;
       int d_bins;
@@ -105,6 +102,7 @@ namespace gr {
       void enable_semilogx(bool en);
       void enable_semilogy(bool en);
       void enable_accumulate(bool en);
+      void disable_legend();
       void autoscalex();
       int  nsamps() const;
       int  bins() const;

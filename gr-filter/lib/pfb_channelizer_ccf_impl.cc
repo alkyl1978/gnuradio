@@ -28,6 +28,10 @@
 #include <gnuradio/io_signature.h>
 #include <stdio.h>
 
+#ifdef _MSC_VER
+#define round(number) number < 0.0 ? ceil(number - 0.5) : floor(number + 0.5)
+#endif
+
 namespace gr {
   namespace filter {
 
@@ -57,10 +61,10 @@ namespace gr {
       // requirement within a few significant figures.
       const double srate = nfilts / oversample_rate;
       const double rsrate = round(srate);
-      if(fabsf(srate - rsrate) > 0.00001)
+      if(fabs(srate - rsrate) > 0.00001)
 	throw std::invalid_argument("pfb_channelizer: oversample rate must be N/i for i in [1, N]");
 
-      set_relative_rate(srate);
+      set_relative_rate(oversample_rate);
 
       // Default channel map. The channel map specifies which input
       // goes to which output channel; so out[0] comes from

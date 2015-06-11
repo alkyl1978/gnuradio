@@ -1,4 +1,4 @@
-# Copyright 2010-2012,2014 Free Software Foundation, Inc.
+# Copyright 2010-2015 Free Software Foundation, Inc.
 #
 # This file is part of GNU Radio
 #
@@ -29,19 +29,24 @@ cmake_minimum_required(VERSION 2.6)
 project(gnuradio CXX C)
 enable_testing()
 
+#make sure our local CMake Modules path comes first
+list(INSERT CMAKE_MODULE_PATH 0 ${CMAKE_SOURCE_DIR}/cmake/Modules)
+
+include(GrBuildTypes)
+
 #select the release build type by default to get optimization flags
 if(NOT CMAKE_BUILD_TYPE)
    set(CMAKE_BUILD_TYPE "Release")
    message(STATUS "Build type not specified: defaulting to release.")
 endif(NOT CMAKE_BUILD_TYPE)
+GR_CHECK_BUILD_TYPE(${CMAKE_BUILD_TYPE})
 set(CMAKE_BUILD_TYPE ${CMAKE_BUILD_TYPE} CACHE STRING "")
-
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/Modules)
+message(STATUS "Build type set to ${CMAKE_BUILD_TYPE}.")
 
 # Set the version information here
 set(VERSION_INFO_MAJOR_VERSION 3)
 set(VERSION_INFO_API_COMPAT    7)
-set(VERSION_INFO_MINOR_VERSION 4)
+set(VERSION_INFO_MINOR_VERSION 8)
 set(VERSION_INFO_MAINT_VERSION git)
 include(GrVersion) #setup version info
 
@@ -86,7 +91,7 @@ endif(CMAKE_COMPILER_IS_GNUCXX)
 
 if(MSVC)
     include_directories(${CMAKE_SOURCE_DIR}/cmake/msvc) #missing headers
-    add_definitions(-D_WIN32_WINNT=0x0501) #minimum version required is windows xp
+    add_definitions(-D_WIN32_WINNT=0x0502) #Minimum version: "Windows Server 2003 with SP1, Windows XP with SP2"
     add_definitions(-DNOMINMAX) #disables stupidity and enables std::min and std::max
     add_definitions( #stop all kinds of compatibility warnings
         -D_SCL_SECURE_NO_WARNINGS
@@ -150,6 +155,7 @@ set(GR_PKG_CONF_DIR     ${GR_CONF_DIR}/${CMAKE_PROJECT_NAME}/conf.d)
 set(GR_LIBEXEC_DIR      libexec)
 set(GR_PKG_LIBEXEC_DIR  ${GR_LIBEXEC_DIR}/${CMAKE_PROJECT_NAME})
 set(GRC_BLOCKS_DIR      ${GR_PKG_DATA_DIR}/grc/blocks)
+set(GR_THEMES_DIR       ${GR_PKG_DATA_DIR}/themes)
 
 # Special exception if prefix is /usr so we don't make a /usr/etc.
 string(COMPARE EQUAL ${CMAKE_INSTALL_PREFIX} "/usr" isusr)
@@ -171,6 +177,9 @@ else(ENABLE_PERFORMANCE_COUNTERS)
   message(STATUS "NO PERF COUNTERS")
 endif(ENABLE_PERFORMANCE_COUNTERS)
 
+OPTION(ENABLE_STATIC_LIBS "Enable building of static libraries" OFF)
+message(STATUS "Building Static Libraries: ${ENABLE_STATIC_LIBS}")
+
 ########################################################################
 # Variables replaced when configuring the package config files
 ########################################################################
@@ -180,6 +189,26 @@ file(TO_NATIVE_PATH "\${exec_prefix}/${GR_LIBRARY_DIR}" libdir)
 file(TO_NATIVE_PATH "\${prefix}/${GR_INCLUDE_DIR}"      includedir)
 file(TO_NATIVE_PATH "${SYSCONFDIR}"                     SYSCONFDIR)
 file(TO_NATIVE_PATH "${GR_PREFSDIR}"                    GR_PREFSDIR)
+
+########################################################################
+# On Apple only, set install name and use rpath correctly, if not already set
+########################################################################
+if(APPLE)
+    if(NOT CMAKE_INSTALL_NAME_DIR)
+        set(CMAKE_INSTALL_NAME_DIR
+            ${CMAKE_INSTALL_PREFIX}/${GR_LIBRARY_DIR} CACHE
+            PATH "Library Install Name Destination Directory" FORCE)
+    endif(NOT CMAKE_INSTALL_NAME_DIR)
+    if(NOT CMAKE_INSTALL_RPATH)
+        set(CMAKE_INSTALL_RPATH
+            ${CMAKE_INSTALL_PREFIX}/${GR_LIBRARY_DIR} CACHE
+            PATH "Library Install RPath" FORCE)
+    endif(NOT CMAKE_INSTALL_RPATH)
+    if(NOT CMAKE_BUILD_WITH_INSTALL_RPATH)
+        set(CMAKE_BUILD_WITH_INSTALL_RPATH ON CACHE
+            BOOL "Do Build Using Library Install RPath" FORCE)
+    endif(NOT CMAKE_BUILD_WITH_INSTALL_RPATH)
+endif(APPLE)
 
 ########################################################################
 # Create uninstall target
@@ -194,13 +223,18 @@ add_custom_target(uninstall
 )
 
 ########################################################################
+# Setup Boost for global use (within this build)
+########################################################################
+include(GrBoost)
+
+########################################################################
 # Enable python component
 ########################################################################
 find_package(PythonLibs 2)
 find_package(SWIG)
 
 if(SWIG_FOUND)
-    message(STATUS "Minimum SWIG version required is 1.3.31")
+    # Minimum SWIG version required is 1.3.31
     set(SWIG_VERSION_CHECK FALSE)
     if("${SWIG_VERSION}" VERSION_GREATER "1.3.30")
         set(SWIG_VERSION_CHECK TRUE)
@@ -243,34 +277,75 @@ endif()
 ########################################################################
 # Setup volk as a subproject
 ########################################################################
-include(GrComponent)
-GR_REGISTER_COMPONENT("volk" ENABLE_VOLK)
+message(STATUS "")
+message(STATUS "Configuring VOLK support...")
 
-set(VOLK_INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/volk/include
-    ${CMAKE_CURRENT_BINARY_DIR}/volk/include
-)
+OPTION(ENABLE_INTERNAL_VOLK "Enable internal VOLK only" ON)
+unset(VOLK_FOUND)
+if(NOT ENABLE_INTERNAL_VOLK)
+    find_package(Volk)
+    if(NOT VOLK_FOUND)
+        message(STATUS "  External VOLK not found; checking internal.")
+    endif()
+endif()
+if(NOT VOLK_FOUND)
+    find_file(INTREE_VOLK_FOUND
+        volk/volk_common.h
+        PATHS ${CMAKE_CURRENT_SOURCE_DIR}/volk/include
+        NO_DEFAULT_PATH
+        NO_CMAKE_FIND_ROOT_PATH
+    )
 
-if(ENABLE_VOLK)
+    if(NOT INTREE_VOLK_FOUND)
+        message(STATUS "  VOLK submodule is not checked out.")
+        message(STATUS "  To check out the VOLK submodule, use:")
+        message(STATUS "    git pull --recurse-submodules=on")
+        message(STATUS "    git submodule update")
+        if(ENABLE_INTERNAL_VOLK)
+            message(STATUS "  External VOLK disabled.")
+        endif()
+        message(STATUS "  Override with -DENABLE_INTERNAL_VOLK=ON/OFF")
+        message(STATUS "")
+        message(FATAL_ERROR "VOLK required but not found.")
+    endif()
 
-include(GrPackage)
-CPACK_SET(CPACK_COMPONENT_GROUP_VOLK_DESCRIPTION "Vector optimized library of kernels")
+    add_subdirectory(volk)
+    # if the above command returns, then VOLK is enabled
 
-CPACK_COMPONENT("volk_runtime"
-    GROUP        "Volk"
-    DISPLAY_NAME "Runtime"
-    DESCRIPTION  "Dynamic link libraries"
-)
+    include(GrComponent)
+    GR_REGISTER_COMPONENT("volk" ENABLE_VOLK)
 
-CPACK_COMPONENT("volk_devel"
-    GROUP        "Volk"
-    DISPLAY_NAME "Development"
-    DESCRIPTION  "C++ headers, package config, import libraries"
-)
+    set(VOLK_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/volk/include
+        ${CMAKE_CURRENT_BINARY_DIR}/volk/include
+    )
 
+    set(VOLK_LIBRARIES volk)
 
-add_subdirectory(volk)
-endif(ENABLE_VOLK)
+    if(ENABLE_VOLK)
+
+        include(GrPackage)
+        CPACK_SET(CPACK_COMPONENT_GROUP_VOLK_DESCRIPTION "Vector optimized library of kernels")
+
+        CPACK_COMPONENT("volk_runtime"
+            GROUP        "Volk"
+            DISPLAY_NAME "Runtime"
+            DESCRIPTION  "Dynamic link libraries"
+        )
+
+        CPACK_COMPONENT("volk_devel"
+            GROUP        "Volk"
+            DISPLAY_NAME "Development"
+            DESCRIPTION  "C++ headers, package config, import libraries"
+        )
+
+    endif(ENABLE_VOLK)
+else()
+    message(STATUS "  An external VOLK has been found and will be used for build.")
+    set(ENABLE_VOLK TRUE)
+endif(NOT VOLK_FOUND)
+
+message(STATUS "  Override with -DENABLE_INTERNAL_VOLK=ON/OFF")
 
 # Handle gr_log enable/disable
 GR_LOGGING()
@@ -312,6 +387,7 @@ add_subdirectory(gr-fft)
 add_subdirectory(gr-filter)
 add_subdirectory(gr-analog)
 add_subdirectory(gr-digital)
+add_subdirectory(gr-dtv)
 add_subdirectory(gr-atsc)
 add_subdirectory(gr-audio)
 add_subdirectory(gr-comedi)
@@ -333,6 +409,14 @@ add_subdirectory(gr-zeromq)
 if(ENABLE_GR_CTRLPORT)
   set(GR_CTRLPORT True)
   add_definitions(-DGR_CTRLPORT)
+
+  if(CTRLPORT_BACKENDS GREATER 0)
+    set(GR_RPCSERVER_ENABLED True)
+
+    if(THRIFT_FOUND)
+      set(GR_RPCSERVER_THRIFT True)
+    endif(THRIFT_FOUND)
+  endif(CTRLPORT_BACKENDS GREATER 0)
 endif(ENABLE_GR_CTRLPORT)
 
 # Install our Cmake modules into $prefix/lib/cmake/gnuradio
@@ -350,7 +434,7 @@ SET(cmake_configs
 )
 
 if(NOT CMAKE_MODULES_DIR)
-   set(CMAKE_MODULES_DIR lib${LIB_SUFFIX}/cmake/gnuradio)
+  set(CMAKE_MODULES_DIR lib${LIB_SUFFIX}/cmake)
 endif(NOT CMAKE_MODULES_DIR)
 
 # Install all other cmake files into same directory
@@ -361,7 +445,7 @@ list(REMOVE_ITEM cmake_others
 
 install(
   FILES ${cmake_configs} ${cmake_others}
-  DESTINATION ${CMAKE_MODULES_DIR}
+  DESTINATION ${CMAKE_MODULES_DIR}/gnuradio
   COMPONENT "runtime_devel"
 )
 
@@ -381,6 +465,13 @@ CONFIGURE_FILE(
   ${CMAKE_CURRENT_SOURCE_DIR}/config.h.in
   ${CMAKE_CURRENT_BINARY_DIR}/gnuradio-runtime/include/gnuradio/config.h
 )
+
+#Re-generate the constants file, now that we actually know which components will be enabled.
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/gnuradio-runtime/lib/constants.cc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/gnuradio-runtime/lib/constants.cc
+    ESCAPE_QUOTES
+@ONLY)
 
 # Install config.h in include/gnuradio
 install(

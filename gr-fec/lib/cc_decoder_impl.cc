@@ -147,7 +147,7 @@ namespace gr {
           d_SUBSHIFT = 0;
         }
 
-        yp_kernel = boost::assign::map_list_of("k=7r=2", volk_8u_x4_conv_k7_r2_8u);
+        std::map<std::string, conv_kernel> yp_kernel = boost::assign::map_list_of("k=7r=2", volk_8u_x4_conv_k7_r2_8u);
 
         std::string k_ = "k=";
         std::string r_ = "r=";
@@ -163,6 +163,8 @@ namespace gr {
         volk_free(d_vp->decisions);
         volk_free(Branchtab);
         volk_free(d_vp->metrics);
+
+	delete d_vp;
 
 	if(d_mode == CC_TAILBITING) {
 	  volk_free(d_managed_in);

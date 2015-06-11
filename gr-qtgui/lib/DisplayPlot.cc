@@ -102,6 +102,12 @@ DisplayPlot::~DisplayPlot()
   // d_zoomer and d_panner deleted when parent deleted
 }
 
+void
+DisplayPlot::disableLegend()
+{
+  // Haven't found a good way to toggle it on/off
+  insertLegend(NULL);
+}
 
 void
 DisplayPlot::setYaxis(double min, double max)
@@ -268,7 +274,7 @@ DisplayPlot::setLineWidth(int which, int width)
     QPen pen(d_plot_curve[which]->pen());
     pen.setWidth(width);
     d_plot_curve[which]->setPen(pen);
-    
+
     // Scale the marker size proportionally
 #if QWT_VERSION < 0x060000
     QwtSymbol sym = (QwtSymbol)d_plot_curve[which]->symbol();
@@ -361,12 +367,12 @@ DisplayPlot::setMarkerAlpha(int which, int alpha)
     // Get the pen color
     QPen pen(d_plot_curve[which]->pen());
     QColor color = pen.color();
-    
+
     // Set new alpha and update pen
     color.setAlpha(alpha);
     pen.setColor(color);
     d_plot_curve[which]->setPen(pen);
-    
+
     // And set the new color for the markers
 #if QWT_VERSION < 0x060000
     QwtSymbol sym = (QwtSymbol)d_plot_curve[which]->symbol();
@@ -396,7 +402,7 @@ DisplayPlot::getMarkerAlpha(int which) const
 void
 DisplayPlot::setStop(bool on)
 {
-  d_stop = on;  
+  d_stop = on;
 }
 
 void
